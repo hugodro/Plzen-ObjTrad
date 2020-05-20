@@ -1,0 +1,713 @@
+/******************************************************************************
+* Fichier: gramObjc.ycc
+* Desc: grammaire en yacc pour traduire les specs de ObjC en Java.
+* Module: AkraLog : TradObjc.
+* Rev: 12 juin 1997 : REV 0 : Hugo DesRosiers : Creation.
+******************************************************************************/
+
+%{
+/* On met ici les declaration et les fichiers inclus */
+
+#include <iostream.h>
+#include <akra/portableDefs.h>
+#include "translator.h"
+#include "typing.h"
+#include "metaTypes.h"
+#include "members.h"
+#include "memberSupport.h"
+#include "identifier.h"
+
+
+#define YYDEBUG	1
+
+
+extern "C" {
+    extern void yyerror(char *);
+    extern int yylex();
+}
+
+extern ObjcTranslator *compiler;
+
+%}
+
+/**************************************************************
+* Keywords of the language, and other meta-characters.
+**************************************************************/
+
+/* Meta-values. */
+
+%token LITERAL_CHAR
+%token LITERAL_LONG
+%token LITERAL_INT
+%token LITERAL_FLOAT
+%token LITERAL_STRING
+%token IDENTIFIER_KW
+
+
+/* Language keywords. */
+
+%token BYCOPY_KW
+%token CHAR_KW
+%token CLASS_KW
+%token CONST_KW
+%token DOUBLE_KW
+%token ELLIPSIS_KW
+%token END_KW
+%token FLOAT_KW
+%token ID_KW
+%token IN_KW
+%token INOUT_KW
+%token INT_KW
+%token INTERFACE_KW
+%token LONG_KW
+%token ONEWAY_KW
+%token OUT_KW
+%token PRIVATE_KW
+%token PROTOCOL_KW
+%token PROTECTED_KW
+%token PUBLIC_KW
+%token SHORT_KW
+%token SIGNED_KW
+%token STRUCT_KW
+%token UNSIGNED_KW
+%token VOID_KW
+%token VOLATILE_KW
+
+
+/****************************************************************
+* Container for all elements produced during parsing.
+****************************************************************/
+
+%union
+{
+	// Builtin types.
+    boolean boolValue;
+    char *string;
+    unsigned int integerNumber;
+    unsigned int longNumber[2];
+    float floatNumber;
+    double doubleNumber;
+
+	// Complex types.
+    Identifier *identifier;
+    OAbstractType *abstractType;
+    VariableDeclaration *varDecl;
+    FunctionalDeclaration *interfaceDecl;
+    OType *otype;
+    Slot *slot;
+    VariableModificator *varModif;
+    Parameter *parameter;
+}
+
+
+/****************************************************************
+* Section: Typing of the objects returned by the non-terminals.
+****************************************************************/
+
+%type <string> IDENTIFIER_KW
+%type <integerNumber> LITERAL_INT
+
+%type <integerNumber> VisibilitySpec
+%type <integerNumber> ClassOrMethodSpec
+%type <integerNumber> ArrayDecl    Size.Opt 
+%type <integerNumber> PointerDecl.Opt    PointerList
+%type <integerNumber> TypeQualifier.Opt    TypeQualifier    ProtocolQualifier
+%type <identifier> ProtocolReferenceList.Opt
+%type <identifier> Identifier    Identifier.Opt
+
+%type <abstractType> ExternalDeclaration
+%type <abstractType> ClassInterface
+%type <abstractType> CategoryInterface
+%type <abstractType> ProtocolDeclaration
+%type <abstractType> ClassDeclarationList
+%type <varDecl> InstanceVariables.Opt
+%type <varDecl> InstanceVariables
+%type <varDecl> ProtectedStructDecl    StructDeclaration
+%type <varDecl> VarDeclaration
+%type <interfaceDecl> InterfaceDeclarationList.Opt
+%type <interfaceDecl> InterfaceDeclaration
+%type <interfaceDecl> Declaration    MethodDeclaration
+%type <otype> ObjcType.Opt	ObjcType
+%type <otype> Type FunctionalType
+%type <otype> StructType    StructTypeComponent
+%type <otype> PrimaryType
+%type <otype> IntegerMathType    RawIntegerMathType
+%type <otype> NonIntegerMathType
+%type <slot> SpecialKeywordSelectors.Opt
+%type <slot> KeywordDeclarator    SpecialKeywordSelectors
+%type <slot> KeywordSelectorList    MethodSelector
+%type <varModif> VarDeclSuffix.Opt
+%type <varModif> VarDeclSuffix    ArrayDeclList 
+%type <parameter> ParamDeclList.Opt    ParamDecl
+
+
+%left ';'
+
+%start ExternalDeclarationList
+
+/* --------------- Debut de la grammaire --------------- */
+%%
+
+ExternalDeclarationList:
+    ExternalDeclaration
+    {
+	if ($1 != NULL) compiler->linkExternalDecl($1);
+    }
+  | ExternalDeclarationList ExternalDeclaration
+    {
+	if ($2 != NULL) compiler->linkExternalDecl($2);
+    }
+
+
+ExternalDeclaration:
+    ClassInterface
+   | CategoryInterface
+   | ProtocolDeclaration
+   | ClassDeclarationList
+    {
+	$$= NULL;
+    }
+ 
+ 
+ ClassInterface:
+    '@' INTERFACE_KW Identifier ':' Identifier
+	    ProtocolReferenceList.Opt
+	    InstanceVariables.Opt InterfaceDeclarationList.Opt
+    '@' END_KW
+    {
+	$$= new OClass($3, $5, $6, $7, $8);
+    }
+
+ 
+CategoryInterface:
+    '@' INTERFACE_KW Identifier '(' Identifier ')'
+	ProtocolReferenceList.Opt
+	InterfaceDeclarationList.Opt
+    '@' END_KW
+    {
+	$$= new OCategory($3, $5, $7, $8);
+    }
+
+
+ProtocolDeclaration:
+    '@' PROTOCOL_KW Identifier
+	ProtocolReferenceList.Opt
+	InterfaceDeclarationList.Opt
+    '@' END_KW
+    {
+	$$= new OProtocol($3, $4, $5);
+    }
+
+
+ProtocolReferenceList.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | '<' IdentifierList '>'
+    {
+	$$= compiler->flushIdentList();
+    }
+
+IdentifierList:
+    Identifier
+    {
+	compiler->linkIdentifier($1);
+    }
+  | IdentifierList ',' Identifier
+    {
+	compiler->linkIdentifier($3);
+    }
+
+
+InstanceVariables.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | InstanceVariables
+
+
+InstanceVariables:
+    '{'
+	ProtectedStructDeclList
+    '}'
+    {
+	$$= compiler->flushStructList();
+    }
+  | '{' '}'
+    {
+	$$= NULL;
+    }
+
+ProtectedStructDeclList:
+    StructDeclarationList
+  | ProtectedStructDecl
+    {
+	compiler->startStructList($1);
+    }
+  | ProtectedStructDeclList ProtectedStructDecl
+    {
+	compiler->linkStructDecl($2);
+    }
+
+
+ProtectedStructDecl:
+    '@' VisibilitySpec StructDeclarationList
+    {
+	VariableDeclaration *varDecl= compiler->flushStructList();
+
+	$$= varDecl;
+	while (varDecl != NULL) {
+	    varDecl->setProtection((VariableDeclaration::Protection)$2);
+	    varDecl= (VariableDeclaration *)varDecl->getNext();
+	}
+
+    }
+
+
+VisibilitySpec:
+    PRIVATE_KW
+    {
+	$$= VariableDeclaration::pPrivate;
+    }
+   | PROTECTED_KW
+    {
+	$$= VariableDeclaration::pProtected;
+    }
+   | PUBLIC_KW
+    {
+	$$= VariableDeclaration::pPublic;
+    }
+
+
+InterfaceDeclarationList.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | InterfaceDeclarationList
+    {
+	$$= compiler->flushDeclarationList();
+    }
+
+
+InterfaceDeclarationList:
+    InterfaceDeclaration
+    {
+	compiler->linkDeclaration($1);
+    }
+  | InterfaceDeclarationList InterfaceDeclaration
+    {
+	compiler->linkDeclaration($2);
+    }
+
+
+InterfaceDeclaration:
+    Declaration
+  | MethodDeclaration
+
+
+MethodDeclaration:
+    ClassOrMethodSpec ObjcType.Opt MethodSelector ';'
+    {
+	$$= new MethodDeclaration((FunctionalDeclaration::Kind)$1, $2, $3);
+    }
+
+
+ClassOrMethodSpec:
+    '+'
+    {
+	$$= FunctionalDeclaration::kClassMethod;
+    }
+  | '-'
+    {
+	$$= FunctionalDeclaration::kInstanceMethod;
+    }
+
+
+ObjcType.Opt:
+    /* Nothing. */
+    {
+	$$= PrimitiveType::getBuiltIn(PrimitiveType::tId);
+    }
+  | ObjcType
+    {
+	$$= $1;
+    }
+
+
+ObjcType:
+    '(' TypeQualifier.Opt Type PointerDecl.Opt ')'
+    {
+	$3->setRTQualifier((OType::RunTimeQualifier)$2);
+	$3->addPointers($4);
+	$$= $3;
+    }
+
+
+MethodSelector:
+    Identifier
+    {
+	$$= new Slot($1);
+    }
+  | KeywordSelectorList SpecialKeywordSelectors.Opt
+    {
+	if ($2 != NULL) {
+	    compiler->linkSlotDecl($2);
+	}
+	$$= compiler->flushSlotList();
+    }
+
+
+KeywordSelectorList:
+    KeywordDeclarator
+    {
+	compiler->linkSlotDecl($1);
+    }
+  | KeywordSelectorList KeywordDeclarator
+    {
+	compiler->linkSlotDecl($2);
+    }
+
+
+KeywordDeclarator:
+    ':' ObjcType.Opt Identifier
+    {
+	$$= new Slot($2, $3);
+    }
+  | Identifier ':' ObjcType.Opt Identifier
+    {
+	$$= new Slot($1, $3, $4);
+    }
+
+
+SpecialKeywordSelectors.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | ',' SpecialKeywordSelectors
+    {
+	$$= $2;
+    }
+
+
+SpecialKeywordSelectors:
+    ELLIPSIS_KW
+    {
+	$$= new EllipsisSlot();
+    }
+  | ParamDeclList
+    {
+	$$= new ParameterSlot(compiler->flushParamList());
+    }
+
+
+Identifier.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | Identifier
+
+
+Identifier:
+    IDENTIFIER_KW
+    {
+	$$= new Identifier($1);
+     }
+
+
+StructDeclarationList:
+    StructDeclaration
+    {
+	compiler->startStructList($1);
+    }
+  | StructDeclarationList StructDeclaration
+    {
+	compiler->linkStructDecl($2);
+    }
+
+
+StructDeclaration:
+    Type VarDeclarationList ';'
+    {
+	VariableDeclaration *tmpVar= $$= compiler->flushStructList();
+	do {
+	    tmpVar->setReturnType($1);
+	    tmpVar= (VariableDeclaration *)tmpVar->getNext();
+	} while (tmpVar != NULL);
+    }
+
+VarDeclarationList:
+    VarDeclaration
+    {
+	compiler->startStructList($1);
+    }
+  | VarDeclarationList ',' VarDeclaration
+  {
+	compiler->linkStructDecl($3);
+  }
+
+
+VarDeclaration:
+    PointerDecl.Opt Identifier VarDeclSuffix.Opt
+    {
+	$$= new VariableDeclaration($1, $2, $3);
+    }
+
+
+VarDeclSuffix.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | VarDeclSuffix
+
+
+VarDeclSuffix:
+    ArrayDeclList
+  | ':' LITERAL_INT
+    {
+	$$= new BitFieldDeclarator($2);
+    }
+
+
+ClassDeclarationList:
+    '@' CLASS_KW IdentifierList ';'
+    {
+	compiler->addClassNotification(compiler->flushIdentList());
+    }
+
+
+Type:
+    Identifier
+    {
+	$$= new UserType($1);
+    }
+ | PrimaryType
+ | StructType
+ | FunctionalType
+
+
+StructType:
+    STRUCT_KW StructTypeComponent
+    {
+	$$= $2;
+    }
+
+StructTypeComponent:
+    Identifier
+    {
+	$$= new StructureType($1);
+    }
+  | Identifier.Opt '{' StructDeclarationList '}'
+    {
+	$$= new StructureType($1, compiler->flushStructList());
+    }
+
+
+ArrayDeclList:
+    ArrayDecl
+    {
+	$$= new ArrayDeclarator($1);
+    }
+  | ArrayDeclList ArrayDecl
+    {
+	((ArrayDeclarator *)$1)->addDimension($2);
+	$$= $1;
+    }
+
+
+ArrayDecl:
+    '[' Size.Opt ']'
+    {
+	$$= $2;
+    }
+
+
+Size.Opt:
+    /* Nothing. */
+    {
+	$$= 0;
+    }
+  | LITERAL_INT
+    {
+	$$= $1;
+    }
+
+
+PointerDecl.Opt:
+    /* Nothing. */
+    {
+	$$= 0;
+    }
+  | PointerList
+
+
+PointerList:
+    TypeQualifier.Opt '*'
+    {
+	$$= 1;
+    }
+  | PointerList TypeQualifier.Opt '*'
+    {
+	$$= $1 + 1;
+    }
+
+
+TypeQualifier.Opt:
+    /* Nothing. */
+    {
+	$$= 0;
+    }
+  | TypeQualifier
+
+
+TypeQualifier:
+    CONST_KW
+    {
+	$$= OType::rtConstant;
+    }
+  | VOLATILE_KW
+    {
+	$$= OType::rtVolatile;
+    }
+  | ProtocolQualifier
+
+
+ProtocolQualifier:
+    IN_KW
+    {
+	$$= OType::rtIn;
+    }
+  | OUT_KW
+    {
+	$$= OType::rtOut;
+    }
+  | INOUT_KW
+    {
+	$$= OType::rtInOut;
+    }
+  | BYCOPY_KW
+    {
+	$$= OType::rtByCopy;
+    }
+  | ONEWAY_KW
+    {
+	$$= OType::rtOneWay;
+    }
+
+
+Declaration:
+    Type Identifier '(' ParamDeclList.Opt ')' ';'
+    {
+	$$= new FunctionDeclaration($1, $2, $4);
+    }
+ 
+ 
+FunctionalType:
+    Type '(' PointerList ')' '(' ParamDeclList.Opt ')'
+    {
+	$$= new FunctionalType($1, $3, $6);
+    }
+
+
+ParamDeclList.Opt:
+    /* Nothing. */
+    {
+	$$= NULL;
+    }
+  | ParamDeclList
+    {
+	$$= compiler->flushParamList();
+    }
+
+
+ParamDeclList:
+    ParamDecl
+    {
+	compiler->startParamList($1);
+    }
+  | ParamDeclList ',' ParamDecl
+    {
+	compiler->linkParameter($3);
+    }
+
+
+ParamDecl:
+    Type PointerDecl.Opt
+    {
+	$1->addPointers($2);
+	$$= new Parameter($1);
+    }
+  | Type PointerDecl.Opt Identifier
+    {
+	$1->addPointers($2);
+	$$= new Parameter($1, $3);
+    }
+
+
+PrimaryType:
+    IntegerMathType
+  | NonIntegerMathType
+  | VOID_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tVoid);
+    }
+  | ID_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tId);
+    }
+
+
+IntegerMathType:
+    UNSIGNED_KW RawIntegerMathType
+    {
+	((PrimitiveType *)$2)->setUnsigned();
+	$$= $2;
+    }
+  | SIGNED_KW RawIntegerMathType
+    {
+	$$= $2;
+    }
+  | RawIntegerMathType
+  | UNSIGNED_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tInt);
+	((PrimitiveType *)$$)->setUnsigned();
+    }
+
+RawIntegerMathType:
+    CHAR_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tChar);
+    }
+  | SHORT_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tShort);
+    }
+  | INT_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tInt);
+    }
+  | LONG_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tLong);
+    }
+
+NonIntegerMathType:
+    FLOAT_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tFloat);
+    }
+  | DOUBLE_KW
+    {
+	$$= new PrimitiveType(PrimitiveType::tDouble);
+    }
+
+
+%%
+
+/* --------------- Fin de la grammaire --------------- */
